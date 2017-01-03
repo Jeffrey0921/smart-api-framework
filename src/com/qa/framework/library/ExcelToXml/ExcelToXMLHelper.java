@@ -5,6 +5,7 @@ import com.library.common.XmlHelper;
 import com.qa.framework.exception.NoSuchNameInExcelException;
 import org.apache.log4j.Logger;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
+import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.xssf.usermodel.XSSFCell;
 import org.apache.poi.xssf.usermodel.XSSFRow;
 import org.apache.poi.xssf.usermodel.XSSFSheet;
@@ -25,6 +26,7 @@ import java.util.Map;
  */
 public class ExcelToXMLHelper {
     protected static Logger logger=Logger.getLogger(ExcelToXMLHelper.class);
+    private static List<String> sqlParamCache=new ArrayList<String>();
     public static Map<String ,List<Map<String,String>>>  readExcel(File file) throws IOException,NoSuchNameInExcelException {
         if (file.getName().endsWith("xls")){
             return readExcelXLS(file);
@@ -61,7 +63,7 @@ public class ExcelToXMLHelper {
                     if (xssfCell == null) {
                         data.put(attributes.get(num), "");
                     } else {
-                        data.put(attributes.get(num), xssfCell.toString());
+                        data.put(attributes.get(num), getStringValInExcel(xssfCell));
                     }
 
                 }
@@ -71,13 +73,29 @@ public class ExcelToXMLHelper {
         return sheetValues;
     }
 
+    private static String getStringValInExcel(XSSFCell xssfCell) {
+        switch (xssfCell.getCellType()){
+            case Cell.CELL_TYPE_BOOLEAN:
+                return xssfCell.getBooleanCellValue()?"true":"false";
+            case Cell.CELL_TYPE_FORMULA:
+                return xssfCell.getCellFormula();
+            case Cell.CELL_TYPE_NUMERIC:
+                xssfCell.setCellType(Cell.CELL_TYPE_STRING);
+                return xssfCell.getStringCellValue();
+            case Cell.CELL_TYPE_STRING:
+                return xssfCell.getStringCellValue();
+            default:
+                return "";
+        }
+    }
+
     private static List<String> getCellValues(XSSFRow row) {
         List<String> cellValues=new ArrayList<String>();
         int minCell=row.getFirstCellNum();
         int maxCell=row.getLastCellNum();
         for (int num=minCell;num<maxCell;num++){
             XSSFCell xssfCell=row.getCell(num);
-            cellValues.add(xssfCell.toString().toLowerCase());
+            cellValues.add(getStringValInExcel(xssfCell).toLowerCase());
         }
         return cellValues;
     }
@@ -114,13 +132,14 @@ public class ExcelToXMLHelper {
                 }
             }
             String url=dataconfig.get("url");
-            String method=dataconfig.get("method");
+            String method=dataconfig.get("httpmethod");
             XmlHelper xml = new XmlHelper();
             xml.createDocument();
             Element root = xml.createDocumentRoot("DataConfig");
             xml.addAttribute(root,"url",url);
             xml.addAttribute(root,"httpMethod",method);
             for (Map<String,String> testDate:testDataForSameUrl){
+                sqlParamCache.clear();
                 Element testdate=xml.addChildElement(root,"TestData");
                 xml.addAttribute(testdate,"name",testDate.get("name"));
                 xml.addAttribute(testdate,"desc",testDate.get("desc"));
@@ -143,10 +162,13 @@ public class ExcelToXMLHelper {
 
     private static void addExpectResult(XmlHelper xml, Element testdate) {
         Element expectResult=xml.addChildElement(testdate,"ExpectResult");
+        xml.addComment(expectResult,"请填写期望结果如下所示：\n " +
+                "            <Pair>errorCode:200</Pair>\n" +
+                "            <Pair>errorMsg:获取上课工具成功</Pair>");
     }
 
     private  static void addAfterChild(XmlHelper xml, Element testdate, Map<String, String> testDate, List<Map<String, String>> paramList, List<Map<String, String>> sqlList, List<Map<String, String>> functionList) {
-        if (testDate.get("before")!=null){
+        if (!testDate.get("after").equals("")){
             Element after=xml.addChildElement(testdate,"After");
             String[] values=testDate.get("after").split(",");
             for (String value:values){
@@ -161,10 +183,12 @@ public class ExcelToXMLHelper {
     }
 
     private static void addCookieProcessAttr(XmlHelper xml, Element element, Map<String, String> map, List<Map<String, String>> cookieProcessList) {
-        Map<String,String> cookieprocessMap=getMapByName(map.get("cookieprocess"),cookieProcessList,"CookieProcess");
-        if (cookieprocessMap.size()!=0){
-            xml.addAttribute(element,"storeCookie",cookieprocessMap.get("storecookie").toLowerCase());
-            xml.addAttribute(element,"useCookie",cookieprocessMap.get("usecookie").toLowerCase());
+        if (!map.get("cookieprocess").equals("")) {
+            Map<String, String> cookieprocessMap = getMapByName(map.get("cookieprocess"), cookieProcessList, "CookieProcess");
+            if (cookieprocessMap.size() != 0) {
+                xml.addAttribute(element, "storeCookie", cookieprocessMap.get("storecookie").toLowerCase());
+                xml.addAttribute(element, "useCookie", cookieprocessMap.get("usecookie").toLowerCase());
+            }
         }
     }
 
@@ -180,7 +204,7 @@ public class ExcelToXMLHelper {
     }
 
     private static void addSetupChild(XmlHelper xml, Element testdate, Map<String, String> testDate, List<Map<String, String>> setupList, List<Map<String, String>> dataConfigList, List<Map<String, String>> paramList, List<Map<String, String>> cookieProcessList, List<Map<String, String>> sqlList, List<Map<String, String>> functionList) {
-        if (testDate.get("setup")!=null){
+        if (!testDate.get("setup").equals("")){
             String[] values=testDate.get("setup").split(",");
             for (String value:values){
                 Element setup=xml.addChildElement(testdate,"Setup");
@@ -191,7 +215,7 @@ public class ExcelToXMLHelper {
                 Map<String,String> map2=getMapByName(setupMap.get("dataconfig"),dataConfigList,"DataConfig");
                 if (map2!=null){
                     xml.addAttribute(setup,"url",map2.get("url"));
-                    xml.addAttribute(setup,"httpMothd",map2.get("httpmethod"));
+                    xml.addAttribute(setup,"httpMethod",map2.get("httpmethod"));
                 }
                 addCookieProcessAttr(xml,setup,setupMap,cookieProcessList);
                 addParamChild(xml,setup,setupMap,paramList,sqlList,functionList);
@@ -212,11 +236,15 @@ public class ExcelToXMLHelper {
                     if (paramMap.get("value").contains("#{")){
                         List<String> lists = StringHelper.find(paramMap.get("value"), "#\\{[a-zA-Z0-9._]*\\}");
                         for (String list : lists) {
-                            String sqlName = list.substring(2, list.length() - 1).split("\\.")[0];
-                            Map<String,String> sqlMap=getMapByName(sqlName,sqlList,"Sql");
-                            Element sql=xml.addChildElement(param,"Sql");
-                            xml.addAttribute(sql,"name",sqlName);
-                            xml.setText(sql,sqlMap.get("value"));
+                            String sqlParam=list.substring(2, list.length() - 1);
+                            if (!sqlParamCache.contains(sqlParam)) {
+                                sqlParamCache.add(sqlParam);
+                                String sqlName = sqlParam.split("\\.")[0];
+                                Map<String, String> sqlMap = getMapByName(sqlName, sqlList, "Sql");
+                                Element sql = xml.addChildElement(param, "Sql");
+                                xml.addAttribute(sql, "name", sqlName);
+                                xml.setText(sql, sqlMap.get("value"));
+                            }
                         }
                     }
                 }
@@ -226,7 +254,7 @@ public class ExcelToXMLHelper {
 
 
     private static void addHeaderChild(XmlHelper xml, Element testdate, Map<String, String> testDate, List<Map<String, String>> cookieList) {
-        if (testDate.get("before")!=null){
+        if (!testDate.get("header").equals("")){
             Element header=xml.addChildElement(testdate,"Header");
             String[] values=testDate.get("header").split(",");
             for (String value:values){
@@ -241,7 +269,7 @@ public class ExcelToXMLHelper {
     }
 
     private static void addBeforeChild(XmlHelper xml, Element testdate, Map<String, String> testDate, List<Map<String, String>> functionList, List<Map<String, String>> sqlList) {
-        if (testDate.get("before")!=null){
+        if (!testDate.get("before").equals("")){
             Element before=xml.addChildElement(testdate,"Before");
             String[] values=testDate.get("before").split(",");
             for (String value:values){
